@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.env
+.venv/
+venv/
+models/
+*.gguf
+*.onnx
+.pytest_cache/
+.coverage
+.DS_Store
