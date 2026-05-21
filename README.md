@@ -1,29 +1,41 @@
 # Model-Runner
 
-Ultra-lightweight model runner gateway.
+Device-first local GGUF model runner.
 
-This project does **not** bundle inference. The user selects the inference backend.
+Model-Runner bundles:
 
-The runner is only a tiny containerized control/proxy layer for:
+- llama.cpp
+- llama-server
+- GGUF runtime support
 
-- local llama.cpp server
-- Ollama
-- vLLM
-- ONNX service
-- remote API-compatible inference
-- any HTTP inference endpoint
+This project is designed for running models locally on user devices.
 
-## Why this design?
+## Philosophy
 
-Model inference is heavy. Distribution should stay light.
+- local-first
+- offline capable
+- no Python
+- no FastAPI
+- no cloud dependency
+- simple deployment
+- small footprint
 
-So this project ships a tiny runner and lets users plug in their own inference engine.
+## What this is
 
 ```text
-client -> model-runner -> user-selected inference backend
+user/app -> model-runner -> bundled llama-server -> GGUF model
 ```
 
-## Build with Podman
+## What this is NOT
+
+- cloud inference platform
+- distributed GPU serving stack
+- Ollama wrapper
+- generic proxy layer
+
+## Build
+
+### Podman
 
 ```bash
 podman build -t model-runner -f Containerfile .
@@ -31,13 +43,19 @@ podman build -t model-runner -f Containerfile .
 
 ## Run
 
+Mount a GGUF model from the host device.
+
 ```bash
-podman run --rm -p 8080:8080 \
-  -e INFERENCE_URL=http://host.containers.internal:11434/api/generate \
+podman run --rm \
+  -p 8080:8080 \
+  -v ./models:/models:Z \
+  -e MODEL=/models/model.gguf \
   model-runner
 ```
 
 ## API
+
+The container exposes llama-server directly.
 
 ### Health
 
@@ -45,31 +63,74 @@ podman run --rm -p 8080:8080 \
 curl http://localhost:8080/health
 ```
 
-### Generate
+### Completion
 
 ```bash
-curl -X POST http://localhost:8080/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"llama3.2","prompt":"Hello"}'
+curl http://localhost:8080/completion \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Hello",
+    "n_predict": 128
+  }'
 ```
 
-The body is passed through to the configured inference backend.
-
-## Environment
+## Environment Variables
 
 | Variable | Default | Description |
 |---|---:|---|
-| HOST | 0.0.0.0 | bind address |
+| MODEL | required | path to GGUF model |
+| HOST | 0.0.0.0 | bind host |
 | PORT | 8080 | bind port |
-| INFERENCE_URL | empty | user-selected inference endpoint |
-| MOCK | 0 | set to 1 for mock responses |
+| CTX_SIZE | 4096 | context size |
+| THREADS | 4 | CPU threads |
+| GPU_LAYERS | 0 | GPU offload layers |
 
-## Philosophy
+## Example models
 
-- No Python
-- No FastAPI
-- No bundled model
-- No forced backend
-- Containerized with Podman
-- Small C gateway
-- User owns inference choice
+```text
+TinyLlama
+Qwen
+Llama 3
+Mistral
+Phi
+Gemma
+DeepSeek GGUF builds
+```
+
+## Device-first usage
+
+### macOS
+
+Future distribution:
+
+```text
+DMG + native app bundle
+```
+
+### Linux
+
+Recommended:
+
+```text
+Podman container or native binary
+```
+
+### Windows
+
+Planned:
+
+```text
+portable executable
+```
+
+## Why this exists
+
+Running llama.cpp manually is inconvenient for many device users.
+
+Model-Runner packages llama.cpp into a simple local runtime that can:
+
+- load GGUF models
+- expose a localhost API
+- work offline
+- run locally on-device
+- stay lightweight
