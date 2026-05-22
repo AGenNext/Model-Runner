@@ -2,9 +2,14 @@ use anyhow::Result;
 use dirs::home_dir;
 use eframe::egui;
 use rfd::FileDialog;
+use std::fs::{self, File};
+use std::io::copy;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
+
+const DEFAULT_MODEL_NAME: &str = "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf";
+const DEFAULT_MODEL_URL: &str = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf";
 
 fn main() -> Result<()> {
     let options = eframe::NativeOptions::default();
@@ -23,7 +28,6 @@ struct App {
     models: Vec<PathBuf>,
     selected: Option<PathBuf>,
     status: String,
-    downloading: bool,
 }
 
 impl Default for App {
@@ -34,7 +38,6 @@ impl Default for App {
             selected: models.first().cloned(),
             models,
             status: String::new(),
-            downloading: false,
         }
     }
 }
@@ -46,34 +49,46 @@ impl eframe::App for App {
 
             if self.models.is_empty() {
                 ui.label("No GGUF models found.");
-
-                if ui.button("Choose GGUF File").clicked() {
-                    if let Some(path) = FileDialog::new()
-                        .add_filter("GGUF", &["gguf"])
-                        .pick_file()
-                    {
-                        self.selected = Some(path);
-                    }
-                }
-
-                if ui.button("Download TinyLlama GGUF").clicked() {
-                    self.status = "Download placeholder".to_string();
-                }
             } else {
                 ui.label("Detected models:");
 
                 for model in &self.models {
-                    let label = model.file_name().unwrap().to_string_lossy();
+                    let label = model
+                        .file_name()
+                        .map(|v| v.to_string_lossy().to_string())
+                        .unwrap_or_else(|| model.display().to_string());
 
                     if ui
-                        .selectable_label(
-                            self.selected.as_ref() == Some(model),
-                            label,
-                        )
+                        .selectable_label(self.selected.as_ref() == Some(model), label)
                         .clicked()
                     {
                         self.selected = Some(model.clone());
                     }
+                }
+            }
+
+            ui.separator();
+
+            if ui.button("Choose GGUF File").clicked() {
+                if let Some(path) = FileDialog::new().add_filter("GGUF", &["gguf"]).pick_file() {
+                    self.selected = Some(path.clone());
+                    if !self.models.contains(&path) {
+                        self.models.push(path);
+                    }
+                }
+            }
+
+            if ui.button("Download TinyLlama GGUF").clicked() {
+                match download_default_model() {
+                    Ok(path) => {
+                        self.selected = Some(path.clone());
+                        self.models = scan_models();
+                        if !self.models.contains(&path) {
+                            self.models.push(path);
+                        }
+                        self.status = "Model downloaded".to_string();
+                    }
+                    Err(err) => self.status = err.to_string(),
                 }
             }
 
@@ -92,6 +107,28 @@ impl eframe::App for App {
     }
 }
 
+fn model_dir() -> Result<PathBuf> {
+    let home = home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    Ok(home.join("Models").join("Model-Runner"))
+}
+
+fn download_default_model() -> Result<PathBuf> {
+    let dir = model_dir()?;
+    fs::create_dir_all(&dir)?;
+
+    let target = dir.join(DEFAULT_MODEL_NAME);
+    if target.exists() {
+        return Ok(target);
+    }
+
+    let response = ureq::get(DEFAULT_MODEL_URL).call()?;
+    let mut reader = response.into_reader();
+    let mut file = File::create(&target)?;
+    copy(&mut reader, &mut file)?;
+
+    Ok(target)
+}
+
 fn scan_models() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
@@ -101,7 +138,6 @@ fn scan_models() -> Vec<PathBuf> {
         roots.push(home.join("Documents"));
         roots.push(home.join(".cache/huggingface"));
         roots.push(home.join(".lmstudio/models"));
-        roots.push(home.join(".ollama/models"));
     }
 
     roots.push(PathBuf::from("./models"));
@@ -115,6 +151,7 @@ fn scan_models() -> Vec<PathBuf> {
 
         for entry in WalkDir::new(root)
             .follow_links(true)
+            .max_depth(8)
             .into_iter()
             .filter_map(Result::ok)
         {
@@ -130,6 +167,8 @@ fn scan_models() -> Vec<PathBuf> {
         }
     }
 
+    found.sort();
+    found.dedup();
     found
 }
 
