@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
+const IMAGE_NAME: &str = "model-runner";
 const DEFAULT_MODEL_NAME: &str = "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf";
 const DEFAULT_MODEL_URL: &str = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf";
 
@@ -27,16 +28,19 @@ fn main() -> Result<()> {
 struct App {
     models: Vec<PathBuf>,
     selected: Option<PathBuf>,
+    runtime: Option<String>,
     status: String,
 }
 
 impl Default for App {
     fn default() -> Self {
         let models = scan_models();
+        let runtime = detect_runtime();
 
         Self {
             selected: models.first().cloned(),
             models,
+            runtime,
             status: String::new(),
         }
     }
@@ -46,6 +50,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Model Runner");
+
+            ui.label(format!(
+                "Runtime: {}",
+                self.runtime.as_deref().unwrap_or("not found")
+            ));
 
             if self.models.is_empty() {
                 ui.label("No GGUF models found.");
@@ -93,7 +102,7 @@ impl eframe::App for App {
             }
 
             if ui.button("Start Model Runner").clicked() {
-                match start_runner(self.selected.as_ref()) {
+                match start_runner(self.runtime.as_deref(), self.selected.as_ref()) {
                     Ok(_) => self.status = "Model Runner started".to_string(),
                     Err(err) => self.status = err.to_string(),
                 }
@@ -105,6 +114,19 @@ impl eframe::App for App {
             }
         });
     }
+}
+
+fn detect_runtime() -> Option<String> {
+    ["podman", "docker"]
+        .iter()
+        .find(|runtime| {
+            Command::new(runtime)
+                .arg("--version")
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false)
+        })
+        .map(|runtime| runtime.to_string())
 }
 
 fn model_dir() -> Result<PathBuf> {
@@ -172,7 +194,8 @@ fn scan_models() -> Vec<PathBuf> {
     found
 }
 
-fn start_runner(model: Option<&PathBuf>) -> Result<()> {
+fn start_runner(runtime: Option<&str>, model: Option<&PathBuf>) -> Result<()> {
+    let runtime = runtime.ok_or_else(|| anyhow::anyhow!("No OCI runtime found"))?;
     let model = model.ok_or_else(|| anyhow::anyhow!("No model selected"))?;
 
     let model_dir = model
@@ -185,7 +208,7 @@ fn start_runner(model: Option<&PathBuf>) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    Command::new("podman")
+    Command::new(runtime)
         .args([
             "run",
             "--rm",
@@ -195,7 +218,7 @@ fn start_runner(model: Option<&PathBuf>) -> Result<()> {
             &format!("{}:/models", model_dir.display()),
             "-e",
             &format!("MODEL=/models/{model_name}"),
-            "model-runner",
+            IMAGE_NAME,
         ])
         .spawn()?;
 
